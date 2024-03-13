@@ -1,0 +1,261 @@
+Program.Sub.Preflight.Start
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'BN Jan, 2019
+'Advanced Fixtures
+
+'Custom Payroll export. The customer does overtime per shift. Any time over 40 hours/week is considered overtime. Special overtime rule on shift 2 shifts
+'The program will be attached to hook 16100 (Post Crystal Report hook). If the Crystal Report is the Labor Performance Report (ID 001823), the program processing will be fired to capture the same data of that report from V_LASER_LABOR_PERF
+
+F.Intrinsic.Control.Try
+	V.Local.sError.Declare
+	
+	'Post process of Crystal Report hook
+	f.Intrinsic.Control.If(v.Caller.Hook,=,16100,and,V.Passed.009001,=,"001823")
+		F.ODBC.Connection!conx.OpenCompanyConnection
+		f.Intrinsic.Control.CallSub("ExportData")
+		F.ODBC.Connection!conx.close
+	f.Intrinsic.Control.EndIf	
+	
+F.Intrinsic.Control.Catch
+    F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Ambient.ScriptPath,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+    F.Intrinsic.UI.Msgbox(V.Local.sError)
+        F.Intrinsic.Control.CallSub(Unload)
+F.Intrinsic.Control.EndTry
+Program.Sub.Main.End
+
+Program.Sub.Unload.Start
+f.Intrinsic.Control.Try
+	v.Local.sError.Declare
+
+	F.Intrinsic.Control.If(V.ODBC.conx.State,=,1)
+		F.ODBC.Connection!conx.close
+	F.Intrinsic.Control.EndIf
+	
+	f.Intrinsic.Control.End
+
+F.Intrinsic.Control.Catch
+	Function.Intrinsic.String.Build("Subroutine Error {0}{0}Subroutine: {1}{0}Error Occurred {2} with description {3}",V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End	
+F.Intrinsic.Control.EndTry
+Program.Sub.Unload.End
+
+Program.Sub.ExportData.Start
+f.Intrinsic.Control.Try
+	v.Local.sError.Declare
+	v.Local.sDir.Declare
+	v.Local.bExist.Declare
+	v.Local.iCnt.Declare
+	v.Local.sHold.Declare
+	v.Local.sSQL.Declare
+	v.Local.sRet.Declare
+	v.Local.sLine.Declare
+	v.Local.sContent.Declare
+	v.Local.sFile.Declare	
+	v.Local.sDateRange.Declare	
+
+	v.Local.fHours.Declare
+	v.Local.sHours.Declare
+	v.Local.fHours2.Declare
+	v.Local.sHours2.Declare
+
+	v.Local.fRate.Declare
+	v.Local.sRate.Declare
+	v.Local.sRate2.Declare
+
+	v.Local.sEarningCode.Declare
+
+	v.Local.sUser.Declare
+	v.Local.sUser.Set(v.Caller.User)
+	
+	'Check Directory
+	f.Intrinsic.String.Build("{0}\Custom\PayrollExportToKronos",v.Caller.BusintDir,v.Local.sDir)
+	f.Intrinsic.File.DirExists(v.Local.sDir,v.Local.bExist)
+	f.Intrinsic.Control.If(v.Local.bExist.Not)
+		f.Intrinsic.File.CreateDir(v.Local.sDir)		
+	f.Intrinsic.Control.EndIf	
+
+	
+	'Get Employee, Time
+	f.Intrinsic.String.Build("Select ltrim(rtrim(Work_Order)) as Employee,Tot_Hrs as Hours,report_head_3 from V_LASER_LABOR_PERF where trmnl = '{0}' and RPTID = '001823' and descr = '(Hours In Decimal)' and Rec_Type <> 'G'",v.Caller.Terminal,v.Local.sSQL)
+	f.Data.DataTable.CreateFromSQL("dtAll","conx",v.Local.sSQL,True)
+	f.Data.DataTable.AddColumn("dtAll","Rate","float",0)
+	f.Data.DataTable.AddColumn("dtAll","Dept","String","")
+	f.Data.DataTable.AddColumn("dtAll","F_Group","String","")
+	f.Data.DataTable.AddColumn("dtAll","Shift","String","")
+	
+	'Rate, Shift,Dept,F_Group
+	f.Data.DataTable.CreateFromSQL("Emp","conx","select employee,rate,Shift,Dept_Employee,PR_BALANCE_GROUP as F_Group from employee_mstr",True)
+
+
+	'Regular Rate
+	f.Data.Dictionary.createFromDatatable("RateDict","Emp","Employee","Rate")
+	f.Data.Dictionary.SetDefaultReturn("RateDict",0)
+	F.Data.DataTable.FillFromDictionary("dtAll", "RateDict", "Employee", "Rate")
+	'Shift
+	f.Data.Dictionary.createFromDatatable("ShiftDict","Emp","Employee","Shift")
+	f.Data.Dictionary.SetDefaultReturn("ShiftDict","")
+	F.Data.DataTable.FillFromDictionary("dtAll", "ShiftDict", "Employee", "Shift")
+	'Dept
+	f.Data.Dictionary.createFromDatatable("DeptDict","Emp","Employee","Dept_Employee")
+	f.Data.Dictionary.SetDefaultReturn("DeptDict","")
+	F.Data.DataTable.FillFromDictionary("dtAll", "DeptDict", "Employee", "Dept")
+	'FGroup
+	f.Data.Dictionary.createFromDatatable("FGroupDict","Emp","Employee","F_Group")
+	f.Data.Dictionary.SetDefaultReturn("FGroupDict","")
+	F.Data.DataTable.FillFromDictionary("dtAll", "FGroupDict", "Employee", "F_Group")	
+	
+
+	f.Intrinsic.Control.If(v.DataTable.dtAll.RowCount,>,0)
+		'Build Content
+		v.Local.sContent.Set("Company Short Name,Employee Id,Pay Statement Type,E/D/T,E/D/T External ID,E Hours,E Base Rate,E/D/T Amount,E Shift,CC1,CC2,CC3,CC9")		
+		f.Intrinsic.Control.For(v.Local.iCnt,0,v.DataTable.dtAll.RowCount--,1)
+		
+			'Format Rate
+			f.Intrinsic.String.Format(v.DataTable.dtAll(v.Local.iCnt).Rate!FieldValString,"######0.00",v.Local.sRate)			
+			
+			'Format Hours
+			f.Intrinsic.String.Format(v.DataTable.dtAll(v.Local.iCnt).Hours!FieldValString,"######0.00",v.Local.sHours)		
+			v.Local.fHours.Set(v.Local.sHours)
+			'Check Hours: if Hours > 40, then split into 2 parts: 40 Regular hours, and the rest is Overtime hours
+			f.Intrinsic.Control.If(v.Local.fHours,>,40)
+				'Hours
+				f.Intrinsic.Math.Sub(v.Local.sHours,40,v.Local.fHours2)
+				f.Intrinsic.String.Format(v.Local.fHours2,"######0.00",v.Local.sHours2)			
+				'Calculate Overtime Rate = 1.5 Regular Rate
+				f.Intrinsic.Math.Mult(v.DataTable.dtAll(v.Local.iCnt).Rate!FieldValString,1.5,v.Local.fRate)
+				f.Intrinsic.String.Format(v.Local.fRate,"######0.00",v.Local.sRate2)
+				'Build Line 1
+				v.Local.sEarningCode.Set("00001")
+				F.Intrinsic.String.Build("AdvancedFixtures,{0},Regular,E,{1},{2},{3},,{4},{5},{6},,",v.DataTable.dtAll(v.Local.iCnt).Employee!FieldValString,v.Local.sEarningCode,"40.00",v.Local.sRate,v.DataTable.dtAll(v.Local.iCnt).Shift!FieldValString,v.DataTable.dtAll(v.Local.iCnt).Dept!FieldValTrim,v.DataTable.dtAll(v.Local.iCnt).F_Group!FieldValTrim,v.Local.sLine)
+				f.Intrinsic.String.Build("{0}{1}{2}",v.Local.sContent,v.Ambient.NewLine,v.Local.sLine,v.Local.sContent)
+				'Build Line 2				
+				v.Local.sEarningCode.Set("00002")	
+				F.Intrinsic.String.Build("AdvancedFixtures,{0},Regular,E,{1},{2},{3},,{4},{5},{6},,",v.DataTable.dtAll(v.Local.iCnt).Employee!FieldValString,v.Local.sEarningCode,v.Local.sHours2,v.Local.sRate2,v.DataTable.dtAll(v.Local.iCnt).Shift!FieldValString,v.DataTable.dtAll(v.Local.iCnt).Dept!FieldValTrim,v.DataTable.dtAll(v.Local.iCnt).F_Group!FieldValTrim,v.Local.sLine)
+				f.Intrinsic.String.Build("{0}{1}{2}",v.Local.sContent,v.Ambient.NewLine,v.Local.sLine,v.Local.sContent)				
+			f.Intrinsic.Control.Else
+				'Build Line only 1 line
+				v.Local.sEarningCode.Set("00001")
+				F.Intrinsic.String.Build("AdvancedFixtures,{0},Regular,E,{1},{2},{3},{4},{5},{6},{7},,",v.DataTable.dtAll(v.Local.iCnt).Employee!FieldValString,v.Local.sEarningCode,v.Local.sHours,v.Local.sRate,"",v.DataTable.dtAll(v.Local.iCnt).Shift!FieldValString,v.DataTable.dtAll(v.Local.iCnt).Dept!FieldValTrim,v.DataTable.dtAll(v.Local.iCnt).F_Group!FieldValTrim,v.Local.sLine)
+				f.Intrinsic.String.Build("{0}{1}{2}",v.Local.sContent,v.Ambient.NewLine,v.Local.sLine,v.Local.sContent)
+			f.Intrinsic.Control.EndIf		
+			
+		f.Intrinsic.Control.Next(v.Local.iCnt)
+			
+		'Build date range reference
+		f.Intrinsic.String.Replace(v.DataTable.dtAll(0).report_head_3!FieldValTrim,"From ","",v.Local.sDateRange)
+		f.Intrinsic.String.Replace(v.Local.sDateRange,"/","-",v.Local.sDateRange)
+		f.Intrinsic.String.Replace(v.Local.sDateRange," thru ","_thru_",v.Local.sDateRange)
+		'Build file path
+		F.Intrinsic.String.Build("{0}\Custom\PayrollExportToKronos\{1}_{2}_{3}_{4}.csv",v.Caller.BusintDir,v.Caller.CompanyCode,v.Local.sUser.Trim,v.Local.sDateRange,v.Ambient.Now.FormatMMDDYYYYHhNnSs,v.Local.sFile)		
+		'save file
+		F.Intrinsic.File.String2File(V.Local.sFile,v.Local.sContent)
+		f.Intrinsic.String.Build("File {0} is generated",v.Local.sFile,v.Local.sRet)
+		f.Intrinsic.UI.Msgbox(v.Local.sRet)
+		
+	f.Intrinsic.Control.Else
+		f.Intrinsic.UI.Msgbox("No record found in Laser_Labor_Perf")
+	f.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Catch
+	F.Intrinsic.String.Build("Project: {0}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}GAB Version: {5}}",V.Ambient.ScriptPath,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	f.Intrinsic.Control.CallSub("Unload")
+F.Intrinsic.Control.EndTry
+Program.Sub.ExportData.End
+
+'Program.Sub.Process.Start
+'F.Intrinsic.Control.Try
+'	V.Local.sError.Declare
+'	V.Local.sToday.Declare
+'	V.Local.sTotime.Declare
+'	V.Local.sSql.Declare
+
+'	F.Intrinsic.String.Left(Variable.Passed.888888,8,Variable.Local.sToday)
+'	F.Intrinsic.String.Mid(Variable.Passed.888888,9,6,Variable.Local.sTotime)
+'	'For Testing purpose***
+'	'v.Local.sToday.Set("20190116")
+'	'v.Local.sTotime.Set("113749")
+'	'************************************************************************************************
+'	
+'	'dtAll will have all the raw data from the labor to payroll transfer as calculated by global shop
+'	F.Intrinsic.String.Build("Select * from PYRL_LABOR_XFER where RUN_CYMD = '{0}' and RUN_TIME = '{1}' order by EMPLOYEE ASC, SEQ ASC", V.Local.sToday, V.Local.sTotime, V.Local.sSql)
+'	F.Data.DataTable.CreateFromSQL("dtAll", "conx", V.Local.sSql, True)
+
+'	F.Intrinsic.Control.If(V.DataTable.dtAll.RowCount, >, 0)
+'		'We continue with data processing
+'		F.Intrinsic.Control.CallSub("Export")
+'	f.Intrinsic.Control.Else
+'		f.Intrinsic.Control.CallSub("Unload")
+'	F.Intrinsic.Control.EndIf
+
+'F.Intrinsic.Control.Catch
+'    F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Ambient.ScriptPath,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+'    F.Intrinsic.UI.Msgbox(V.Local.sError)
+'        F.Intrinsic.Control.CallSub(Unload)
+'F.Intrinsic.Control.EndTry
+'Program.Sub.Process.End
+
+'Program.Sub.Export.Start
+'F.Intrinsic.Control.Try
+'	V.Local.sError.Declare
+'	V.Local.sFileName.Declare
+'	V.Local.sReport.Declare
+'	v.Local.sDir.Declare
+'	v.Local.bExist.Declare
+'	v.Local.iCnt.Declare
+'	v.Local.sContent.Declare
+'	v.Local.sLine.Declare
+'	v.Local.sEarningCode.Declare
+'	v.Local.sHold.Declare
+'	v.Local.fRate.Declare
+'	v.Local.sRate.Declare
+'	v.Local.sHours.Declare
+'	
+'	'Check Directory
+'	f.Intrinsic.String.Build("{0}\Custom\PayrollExportToKronos",v.Caller.BusintDir,v.Local.sDir)
+'	f.Intrinsic.File.DirExists(v.Local.sDir,v.Local.bExist)
+'	f.Intrinsic.Control.If(v.Local.bExist.Not)
+'		f.Intrinsic.File.CreateDir(v.Local.sDir)		
+'	f.Intrinsic.Control.EndIf
+'	'Build file path
+'	F.Intrinsic.String.Build("{0}\PayrollExp_{1}_{2}.csv",v.Local.sDir,v.Caller.CompanyCode,v.Ambient.Now.FormatMMDDYYHhNnSs,V.Local.sFileName)
+'	
+'	'Regular Rate
+'	f.Data.Dictionary.CreateFromSQL("RateDict","conx","select employee,rate from employee_mstr")
+'	F.Data.DataTable.AddColumn("dtAll", "Rate", "Float",0)
+'	F.Data.DataTable.FillFromDictionary("dtAll", "RateDict", "Employee", "Rate")
+'	
+'	v.Local.sContent.Set("Company Short Name,Employee Id,Pay Statement Type,E/D/T,E/D/T External ID,E Hours,E Base Rate,E/D/T Amount,E Shift,CC1,CC2,CC3,CC9")
+'	f.Intrinsic.Control.For(v.Local.iCnt,0,v.DataTable.dtAll.RowCount--,1)
+'		'Earning Code
+'		f.Intrinsic.String.Split(v.DataTable.dtAll(v.Local.iCnt).Descr!FieldValString,"-",v.Local.sHold)
+'		f.Intrinsic.String.LPad(v.Local.sHold(0).Trim,"0",4,v.Local.sEarningCode)
+'		'Rate
+'		f.Intrinsic.Control.If(v.Local.sHold(0).Trim,=,"2")
+'			f.Intrinsic.Math.Mult(v.DataTable.dtAll(v.Local.iCnt).Rate!FieldValString,1.5,v.Local.fRate)
+'			f.Intrinsic.String.Format(v.Local.fRate,"######0.00",v.Local.sRate)
+'		f.Intrinsic.Control.Else
+'			f.Intrinsic.String.Format(v.DataTable.dtAll(v.Local.iCnt).Rate!FieldValString,"######0.00",v.Local.sRate)
+'		f.Intrinsic.Control.EndIf
+'		'Hours
+'		f.Intrinsic.String.Format(v.DataTable.dtAll(v.Local.iCnt).Hours!FieldValString,"######0.00",v.Local.sHours)
+'		
+'		'Build Line
+'		F.Intrinsic.String.Build("AdvancedFixtures,{0},Regular,E,{1},{2},{3},{4},{5},{6},{7},,",v.DataTable.dtAll(v.Local.iCnt).Employee!FieldValString,v.Local.sEarningCode,v.Local.sHours,v.Local.sRate,"",v.DataTable.dtAll(v.Local.iCnt).Shift!FieldValString,v.DataTable.dtAll(v.Local.iCnt).Dept!FieldValTrim,v.DataTable.dtAll(v.Local.iCnt).F_Group!FieldValTrim,v.Local.sLine)
+'		f.Intrinsic.String.Build("{0}{1}{2}",v.Local.sContent,v.Ambient.NewLine,v.Local.sLine,v.Local.sContent)
+'	f.Intrinsic.Control.Next(v.Local.iCnt)
+'	
+'	f.Intrinsic.File.String2File(v.Local.sFileName,v.Local.sContent)
+
+'	F.Intrinsic.String.Build("Payroll CSV file {0} has been created in the Global\BUSINT\Custom\PayrollExportToKronos directory.", V.Ambient.Date.FormatMMDDYY, V.Local.sReport)
+'	F.Intrinsic.UI.Msgbox(V.Local.sReport, "EXPORT SUCCESSFUL")
+
+'F.Intrinsic.Control.Catch
+'	F.Intrinsic.String.Build("Project: {0}{1}{1}Subroutine: {2}{1}Error Occurred {3} with description {4}{1}{1}GAB Version: {5}",V.Ambient.ScriptPath,V.Ambient.Newline,V.Ambient.CurrentSubroutine,V.Ambient.ErrorNumber,V.Ambient.ErrorDescription,V.Ambient.GABVersion,V.Local.sError)
+'	F.Intrinsic.UI.Msgbox(V.Local.sError)
+'	F.Intrinsic.Control.CallSub(Unload)
+'F.Intrinsic.Control.EndTry
+'Program.Sub.Export.End
